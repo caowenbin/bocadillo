@@ -9,7 +9,8 @@ from starlette.middleware.lifespan import LifespanMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.wsgi import WSGIResponder
 from starlette.testclient import TestClient
-from uvicorn.main import get_logger, run
+from uvicorn.config import get_logger
+from uvicorn.main import run
 from uvicorn.reloaders.statreload import StatReload
 
 from . import hooks, validation
@@ -559,16 +560,14 @@ class API(TemplatesMixin, metaclass=DocsMeta):
         if debug:
             self.debug = True
             reloader = StatReload(get_logger(log_level))
-            reloader.run(
-                run,
-                {
-                    "app": self,
-                    "host": host,
-                    "port": port,
-                    "log_level": log_level,
-                    "debug": self.debug,
-                    **kwargs,
-                },
-            )
+            kwargs = {
+                "app": self,
+                "host": host,
+                "port": port,
+                "log_level": log_level,
+                "debug": self.debug,
+                **kwargs,
+            }
+            reloader.run(run, kwargs)
         else:
             _run(self, host=host, port=port, **kwargs)

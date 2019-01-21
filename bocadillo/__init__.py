@@ -10,4 +10,4 @@ from .response import Response
 from .request import Request
 from .validation import ValidationError
 
-__version__ = "0.10.0"
+__version__ = "0.10.1"
