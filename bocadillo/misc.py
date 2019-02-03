@@ -1,6 +1,5 @@
-import inspect
 from os.path import join, dirname, abspath
-from typing import Callable, Set
+from typing import Callable
 
 assets_dir = join(dirname(abspath(__file__)), "assets")
 

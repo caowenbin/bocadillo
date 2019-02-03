@@ -14,7 +14,7 @@ from typing import (
     Union,
 )
 
-import parse
+from parse import Parser
 from starlette.websockets import WebSocketClose
 
 from . import views
@@ -32,7 +32,6 @@ WILDCARD = "{}"
 
 T = TypeVar("T")
 
-
 # Base classes
 
 
@@ -49,7 +48,7 @@ class BaseRoute:
         if pattern != WILDCARD and not pattern.startswith("/"):
             pattern = f"/{pattern}"
         self._pattern = pattern
-        self._parser = parse.Parser(self._pattern)
+        self._parser = Parser(self._pattern)
 
     @property
     def pattern(self) -> str:
@@ -82,8 +81,7 @@ class BaseRoute:
         # Returns
         params (dict or None):
             If the URL path matches the URL pattern, this is a dictionary
-            containing the route parameters and query parameters,
-            otherwise it is `None`.
+            containing the route parameters, otherwise it is `None`.
         """
         result = self._parser.parse(path)
         return result.named if result is not None else None
@@ -99,10 +97,7 @@ class BaseRoute:
         raise NotImplementedError
 
 
-_R = TypeVar("_R")
-
-
-class RouteMatch(Generic[_R]):  # pylint: disable=unsubscriptable-object
+class RouteMatch(Generic[T]):  # pylint: disable=unsubscriptable-object
     """Represents a match between an URL path and a route.
 
     # Parameters
@@ -110,12 +105,12 @@ class RouteMatch(Generic[_R]):  # pylint: disable=unsubscriptable-object
     params (dict): extracted route parameters.
     """
 
-    def __init__(self, route: _R, params: dict):
+    def __init__(self, route: T, params: dict):
         self.route = route
         self.params = params
 
 
-class BaseRouter(Generic[_R]):
+class BaseRouter(Generic[T]):
     """The base router class.
 
     # Attributes
@@ -124,7 +119,7 @@ class BaseRouter(Generic[_R]):
     """
 
     def __init__(self):
-        self.routes: Dict[str, _R] = {}
+        self.routes: Dict[str, T] = {}
 
     def _get_key(self, route: BaseRoute) -> str:
         raise NotImplementedError
@@ -133,14 +128,14 @@ class BaseRouter(Generic[_R]):
         """Register a route. Not implemented."""
         raise NotImplementedError
 
-    def add(self, route: _R):
+    def add(self, route: T):
         self.routes[self._get_key(route)] = route
 
     def route(self, *args, **kwargs):
         """Register a route by decorating a view."""
         return partial(self.add_route, *args, **kwargs)
 
-    def match(self, path: str) -> Optional[RouteMatch[_R]]:
+    def match(self, path: str) -> Optional[RouteMatch[T]]:
         """Attempt to match an URL path against one of the registered routes.
 
         # Parameters
@@ -157,7 +152,7 @@ class BaseRouter(Generic[_R]):
                 return RouteMatch(route=route, params=params)
         return None
 
-    def mount(self, other: "BaseRouter[_R]", root: str = ""):
+    def mount(self, other: "BaseRouter[T]", root: str = ""):
         for route in other.routes.values():
             self.add(route.clone(pattern=root + route.pattern))
 
@@ -188,6 +183,11 @@ class HTTPRoute(BaseRoute):
                 exclude={*self.parameters, "req", "res"},
                 field_type="query parameter",
             )
+
+    def _get_clone_kwargs(self) -> dict:
+        kwargs = super()._get_clone_kwargs()
+        kwargs.update({"view": self.view, "name": self.name})
+        return kwargs
 
     def _get_clone_kwargs(self) -> dict:
         kwargs = super()._get_clone_kwargs()
