@@ -59,9 +59,7 @@ def build_converter(func: Callable, fields: Iterable[str]) -> Converter:
                 else lambda value: value
             )
         )
-        # v Applies to alias from the `typing` module, such as `List` or `Dict`.
-        not_instanciable = not getattr(converter, "_inst", True)
-        if not_instanciable or not callable(converter):
+        if not callable(converter):
             raise ConverterMustBeCallable(converter)
 
         field_converters[field] = converter

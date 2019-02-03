@@ -104,7 +104,7 @@ def test_custom_converter(api: API):
     assert r.json() == ["a", "b", "c and d"]
 
 
-@pytest.mark.parametrize("converter", [1, None, List[str]])
+@pytest.mark.parametrize("converter", [1, None, "hello"])
 def test_annotation_must_be_callable(api: API, converter):
     with pytest.raises(ConverterMustBeCallable):
 
