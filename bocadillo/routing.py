@@ -17,6 +17,7 @@ from starlette.websockets import WebSocketClose
 
 from . import views
 from .app_types import HTTPApp, Receive, Scope, Send
+from .converters import ConversionError
 from .errors import HTTPError
 from .redirection import Redirection
 from .request import Request
@@ -58,14 +59,13 @@ class BaseRoute:
         """Parse an URL path against the route's URL pattern.
 
         # Returns
-        result (dict or None):
+        params (dict or None):
             If the URL path matches the URL pattern, this is a dictionary
-            containing the route parameters, otherwise None.
+            containing the route parameters and query parameters,
+            otherwise it is `None`.
         """
         result = parse(self.pattern, path)
-        if result is not None:
-            return result.named
-        return None
+        return result.named if result is not None else None
 
     async def __call__(self, *args, **kwargs):
         raise NotImplementedError
@@ -74,7 +74,7 @@ class BaseRoute:
 _R = TypeVar("_R")
 
 
-class RouteMatch(Generic[_R]):
+class RouteMatch(Generic[_R]):  # pylint: disable=unsubscriptable-object
     """Represents a match between an URL path and a route.
 
     # Parameters
@@ -232,12 +232,22 @@ class HTTPRouter(HTTPApp, BaseRouter[HTTPRoute]):
 
     async def __call__(self, req: Request, res: Response) -> Response:
         match = self.match(req.url.path)
+
         if match is None:
             raise HTTPError(status=404)
+
         try:
-            await match.route(req, res, **match.params)
+            query_params = match.route.view.convert_query_params(
+                req.method, req.query_params
+            )
+        except ConversionError as exc:
+            raise HTTPError(status=400, detail=exc.errors)
+
+        try:
+            await match.route(req, res, **match.params, **query_params)
         except Redirection as redirection:
             res = redirection.response
+
         return res
 
 
