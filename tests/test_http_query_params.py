@@ -2,8 +2,8 @@ from typing import List
 
 import pytest
 
-from bocadillo import API, Request, Response
-from bocadillo.query_params import ConverterMustBeCallable
+from bocadillo import API
+from bocadillo.converters import ConverterMustBeCallable
 
 
 def test_with_default(api: API):

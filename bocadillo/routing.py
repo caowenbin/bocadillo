@@ -1,13 +1,11 @@
 import inspect
 import re
-from collections import defaultdict
 from functools import partial
 from typing import (
     Any,
     Callable,
     Dict,
     Generic,
-    Iterable,
     Optional,
     Set,
     Tuple,
@@ -21,9 +19,9 @@ from starlette.websockets import WebSocketClose
 
 from . import views
 from .app_types import HTTPApp, Receive, Scope, Send
+from .converters import ConversionError, Converter
 from .errors import HTTPError
 from .misc import cached_property
-from .query_params import QueryParamsConverter, ConversionError
 from .redirection import Redirection
 from .request import Request
 from .response import Response
@@ -33,6 +31,7 @@ from .websockets import WebSocket, WebSocketView
 WILDCARD = "{}"
 
 T = TypeVar("T")
+
 
 # Base classes
 
@@ -181,11 +180,13 @@ class HTTPRoute(BaseRoute):
         super().__init__(pattern)
         self.view = view
         self.name = name
-        self._query_converters: Dict[str, QueryParamsConverter] = {}
+        self._query_converters: Dict[str, Converter] = {}
 
         for method, handler in views.get_handlers(view).items():
-            self._query_converters[method] = QueryParamsConverter(
-                handler, route_parameters=self.parameters
+            self._query_converters[method] = Converter(
+                handler,
+                exclude={*self.parameters, "req", "res"},
+                field_type="query parameter",
             )
 
     def _get_clone_kwargs(self) -> dict:
@@ -201,18 +202,10 @@ class HTTPRoute(BaseRoute):
         except HandlerDoesNotExist as exc:
             raise HTTPError(405) from exc
 
-        errors = []
-        for param in self._query_converters[method].required():
-            if param not in req.query_params:
-                errors.append(f"{param}: this query parameter is required.")
-        if errors:
-            raise HTTPError(400, detail=errors)
-
-        converter = self._query_converters[req.method.lower()]
         try:
-            query_params = converter(req.query_params)
+            query_params = self._query_converters[method](req.query_params)
         except ConversionError as exc:
-            raise HTTPError(status=400, detail=exc.errors)
+            raise HTTPError(400, detail=exc.errors)
 
         await handler(req, res, **params, **query_params)
 
