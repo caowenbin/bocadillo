@@ -87,7 +87,7 @@ class BaseRoute:
         return result.named if result is not None else None
 
     def _get_clone_kwargs(self) -> dict:
-        return {"pattern": self.pattern}
+        return {"pattern": self._pattern}
 
     def clone(self: T, **kwargs: Any) -> T:
         kwargs = {**self._get_clone_kwargs(), **kwargs}
@@ -183,11 +183,6 @@ class HTTPRoute(BaseRoute):
                 exclude={*self.parameters, "req", "res"},
                 field_type="query parameter",
             )
-
-    def _get_clone_kwargs(self) -> dict:
-        kwargs = super()._get_clone_kwargs()
-        kwargs.update({"view": self.view, "name": self.name})
-        return kwargs
 
     def _get_clone_kwargs(self) -> dict:
         kwargs = super()._get_clone_kwargs()
