@@ -1,33 +1,40 @@
 import inspect
+import re
+from collections import defaultdict
 from functools import partial
 from typing import (
     Any,
     Callable,
     Dict,
     Generic,
+    Iterable,
     Optional,
+    Set,
     Tuple,
     Type,
     TypeVar,
     Union,
 )
 
-from parse import parse
+import parse
 from starlette.websockets import WebSocketClose
 
 from . import views
 from .app_types import HTTPApp, Receive, Scope, Send
-from .converters import ConversionError
 from .errors import HTTPError
+from .misc import cached_property
+from .query_params import QueryParamsConverter, ConversionError
 from .redirection import Redirection
 from .request import Request
 from .response import Response
 from .views import HandlerDoesNotExist, View
 from .websockets import WebSocket, WebSocketView
 
-# Base classes
-
 WILDCARD = "{}"
+
+T = TypeVar("T")
+
+# Base classes
 
 
 class BaseRoute:
@@ -37,10 +44,25 @@ class BaseRoute:
     pattern (str): an URL pattern.
     """
 
+    _PARAMETER_REGEX = re.compile(r"{(?P<name>\w+)(?::\w+)?}")
+
     def __init__(self, pattern: str):
         if pattern != WILDCARD and not pattern.startswith("/"):
             pattern = f"/{pattern}"
-        self.pattern = pattern
+        self._pattern = pattern
+        self._parser = parse.Parser(self._pattern)
+
+    @property
+    def pattern(self) -> str:
+        return self._pattern
+
+    @cached_property
+    def parameters(self) -> Set[str]:
+        """Return the set of parameters present in the URL pattern."""
+        try:
+            return set(self._PARAMETER_REGEX.findall(self._pattern))
+        except AttributeError:
+            return set()
 
     def url(self, **kwargs) -> str:
         """Return full path for the given route parameters.
@@ -53,7 +75,7 @@ class BaseRoute:
             A full URL path obtained by formatting the route pattern with
             the provided route parameters.
         """
-        return self.pattern.format(**kwargs)
+        return self._pattern.format(**kwargs)
 
     def parse(self, path: str) -> Optional[dict]:
         """Parse an URL path against the route's URL pattern.
@@ -64,8 +86,15 @@ class BaseRoute:
             containing the route parameters and query parameters,
             otherwise it is `None`.
         """
-        result = parse(self.pattern, path)
+        result = self._parser.parse(path)
         return result.named if result is not None else None
+
+    def _get_clone_kwargs(self) -> dict:
+        return {"pattern": self.pattern}
+
+    def clone(self: T, **kwargs: Any) -> T:
+        kwargs = {**self._get_clone_kwargs(), **kwargs}
+        return type(self)(**kwargs)
 
     async def __call__(self, *args, **kwargs):
         raise NotImplementedError
@@ -131,8 +160,7 @@ class BaseRouter(Generic[_R]):
 
     def mount(self, other: "BaseRouter[_R]", root: str = ""):
         for route in other.routes.values():
-            route.pattern = root + route.pattern
-            self.add(route)
+            self.add(route.clone(pattern=root + route.pattern))
 
 
 # HTTP
@@ -153,12 +181,40 @@ class HTTPRoute(BaseRoute):
         super().__init__(pattern)
         self.view = view
         self.name = name
+        self._query_converters: Dict[str, QueryParamsConverter] = {}
+
+        for method, handler in views.get_handlers(view).items():
+            self._query_converters[method] = QueryParamsConverter(
+                handler, route_parameters=self.parameters
+            )
+
+    def _get_clone_kwargs(self) -> dict:
+        kwargs = super()._get_clone_kwargs()
+        kwargs.update({"view": self.view, "name": self.name})
+        return kwargs
 
     async def __call__(self, req: Request, res: Response, **params) -> None:
+        method = req.method.lower()
+
         try:
-            await self.view(req, res, **params)
-        except HandlerDoesNotExist as e:
-            raise HTTPError(405) from e
+            handler = self.view.get_handler(method)
+        except HandlerDoesNotExist as exc:
+            raise HTTPError(405) from exc
+
+        errors = []
+        for param in self._query_converters[method].required():
+            if param not in req.query_params:
+                errors.append(f"{param}: this query parameter is required.")
+        if errors:
+            raise HTTPError(400, detail=errors)
+
+        converter = self._query_converters[req.method.lower()]
+        try:
+            query_params = converter(req.query_params)
+        except ConversionError as exc:
+            raise HTTPError(status=400, detail=exc.errors)
+
+        await handler(req, res, **params, **query_params)
 
 
 class HTTPRouter(HTTPApp, BaseRouter[HTTPRoute]):
@@ -237,14 +293,7 @@ class HTTPRouter(HTTPApp, BaseRouter[HTTPRoute]):
             raise HTTPError(status=404)
 
         try:
-            query_params = match.route.view.convert_query_params(
-                req.method, req.query_params
-            )
-        except ConversionError as exc:
-            raise HTTPError(status=400, detail=exc.errors)
-
-        try:
-            await match.route(req, res, **match.params, **query_params)
+            await match.route(req, res, **match.params)
         except Redirection as redirection:
             res = redirection.response
 
@@ -271,6 +320,11 @@ class WebSocketRoute(BaseRoute):
         super().__init__(pattern)
         self.view = view
         self._ws_kwargs = kwargs
+
+    def _get_clone_kwargs(self) -> dict:
+        kwargs = super()._get_clone_kwargs()
+        kwargs.update({"view": self.view, **self._ws_kwargs})
+        return kwargs
 
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send, **params

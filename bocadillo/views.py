@@ -1,10 +1,8 @@
 import inspect
-from collections import defaultdict
 from functools import partial, wraps
 from typing import Any, Dict, List, Optional, Union
 
-from . import converters
-from .app_types import Handler, QueryParams
+from .app_types import Handler
 from .compat import call_async, camel_to_snake
 from .constants import ALL_HTTP_METHODS
 
@@ -46,11 +44,8 @@ class View:
     name (str): the name of the view.
     """
 
-    def __init__(
-        self, name: str, query_validators: Dict[str, converters.Validator]
-    ):
+    def __init__(self, name: str):
         self.name = name
-        self._query_validators = query_validators
 
     get: Handler
     post: Handler
@@ -73,17 +68,8 @@ class View:
         if "get" in handlers and "head" not in handlers:
             handlers["head"] = handlers["get"]
 
-        # Build query string validators
-        query_validators = defaultdict(
-            lambda: converters.identity,
-            {
-                method: converters.validator(handler)
-                for method, handler in handlers.items()
-            },
-        )
-
         # Create the view object.
-        vue = cls(name, query_validators=query_validators)
+        vue = cls(name)
         vue.__doc__ = docstring
 
         # Assign method handlers.
@@ -92,24 +78,14 @@ class View:
 
         return vue
 
-    def _get_handler(self, req) -> Handler:
+    def get_handler(self, method: str) -> Handler:
         try:
             return self.handle
         except AttributeError:
-            return getattr(self, req.method.lower())
-
-    def convert_query_params(
-        self, method: str, query_params: QueryParams
-    ) -> dict:
-        return self._query_validators[method.lower()](query_params)
-
-    async def __call__(self, req, res, **kwargs):
-        try:
-            handler: Handler = self._get_handler(req)
-        except AttributeError as e:
-            raise HandlerDoesNotExist from e
-        else:
-            await handler(req, res, **kwargs)
+            try:
+                return getattr(self, method)
+            except AttributeError as exc:
+                raise HandlerDoesNotExist from exc
 
 
 def from_handler(handler: Handler, methods: MethodsParam = None) -> View:
@@ -167,11 +143,17 @@ def get_handlers(obj: Any) -> Dict[str, Handler]:
     handlers (dict):
         A dict mapping an HTTP method to a handler.
     """
-    return {
-        method: getattr(obj, method)
-        for method in ("handle", *map(str.lower, ALL_HTTP_METHODS))
-        if hasattr(obj, method)
-    }
+    all_methods = map(str.lower, ALL_HTTP_METHODS)
+    try:
+        handle = obj.handle
+    except AttributeError:
+        return {
+            method: getattr(obj, method)
+            for method in all_methods
+            if hasattr(obj, method)
+        }
+    else:
+        return {method: handle for method in all_methods}
 
 
 def view(methods: MethodsParam = None):
